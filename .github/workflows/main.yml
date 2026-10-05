@@ -1,0 +1,168 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install and build web app
+        run: |
+          npm install
+          npm run build
+
+      - name: Add Capacitor and create Android project
+        run: |
+          npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.abood.gymmate",
+            "appName": "GymMate",
+            "webDir": "dist",
+            "server": { "androidScheme": "https" }
+          }
+          EOF
+          npx cap add android
+
+      - name: Patch manifest, icons and version
+        run: |
+          python3 -m pip install --user --break-system-packages pillow
+          python3 - <<'PY'
+          import os
+          from PIL import Image
+
+          # manifest: camera + portrait
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p, encoding='utf-8').read()
+          perm = ('    <uses-permission android:name="android.permission.CAMERA" />\n'
+                  '    <uses-feature android:name="android.hardware.camera" android:required="false" />\n')
+          if 'android.permission.CAMERA' not in s:
+              s = s.replace('<application', perm + '    <application', 1)
+          s = s.replace('<activity', '<activity android:screenOrientation="portrait"', 1)
+          open(p, 'w', encoding='utf-8').write(s)
+
+          # icons
+          res = 'android/app/src/main/res'
+          fg = Image.open('public/icons/maskable-512.png').convert('RGBA')
+          ic = Image.open('public/icons/icon-512.png').convert('RGBA')
+          dens = {'mdpi': (48, 108), 'hdpi': (72, 162), 'xhdpi': (96, 216), 'xxhdpi': (144, 324), 'xxxhdpi': (192, 432)}
+          for d, (legacy, fgsize) in dens.items():
+              folder = f'{res}/mipmap-{d}'
+              os.makedirs(folder, exist_ok=True)
+              small = ic.resize((legacy, legacy), Image.LANCZOS)
+              small.save(f'{folder}/ic_launcher.png')
+              small.save(f'{folder}/ic_launcher_round.png')
+              fg.resize((fgsize, fgsize), Image.LANCZOS).save(f'{folder}/gm_fg.png')
+          os.makedirs(f'{res}/mipmap-anydpi-v26', exist_ok=True)
+          os.makedirs(f'{res}/values', exist_ok=True)
+          xml = ('<?xml version="1.0" encoding="utf-8"?>\n'
+                 '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                 '  <background android:drawable="@color/gm_bg"/>\n'
+                 '  <foreground android:drawable="@mipmap/gm_fg"/>\n'
+                 '</adaptive-icon>\n')
+          for n in ('ic_launcher', 'ic_launcher_round'):
+              open(f'{res}/mipmap-anydpi-v26/{n}.xml', 'w', encoding='utf-8').write(xml)
+          open(f'{res}/values/gm_colors.xml', 'w', encoding='utf-8').write(
+              '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n  <color name="gm_bg">#0E0D0B</color>\n</resources>\n')
+          PY
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName \"1.0\"/versionName \"2.1.${{ github.run_number }}\"/" android/app/build.gradle
+          npx cap sync android
+
+      - name: Android SDK
+        run: |
+          SDKM="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" > /dev/null || true
+
+      - name: Build release APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Sign APK
+        run: |
+          base64 -d > release.keystore <<'KS'
+          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
+          5AICJxA=
+          KS
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER=$(ls "$SDK"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" sign --ks release.keystore --ks-key-alias gymmate \
+            --ks-pass pass:gymmate2026 --key-pass pass:gymmate2026 \
+            --out GymMate.apk android/app/build/outputs/apk/release/app-release-unsigned.apk
+          "$APKSIGNER" verify GymMate.apk
+          ls -lh GymMate.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GymMate-apk
+          path: GymMate.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "apk-${{ github.run_number }}" GymMate.apk \
+            --title "GymMate APK #${{ github.run_number }}" \
+            --notes "Standalone Android APK (Capacitor). Download GymMate.apk and install."
