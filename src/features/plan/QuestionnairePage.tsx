@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Activity, Apple, Bone, ChevronLeft, ChevronRight, Dumbbell, Flame, Home, Leaf, Milk, Mountain, ShieldCheck,
-  Sparkles, Trophy, Venus, Mars, Wallet, Weight, Zap
+  Sparkles, Trophy, Wallet, Weight, Zap
 } from 'lucide-react';
+import { Mars, Venus } from '@/components/icons/gender';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -167,4 +168,4 @@ export function QuestionnairePage() {
       </Button>
     </div>
   );
-}
+    }
